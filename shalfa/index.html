@@ -1,0 +1,119 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Shalfa – Ember Bloom</title>
+<style>html,body{margin:0;background:#111}canvas{display:block;width:min(100vw,56.25vh);height:auto;margin:0 auto}</style></head>
+<body><canvas id="c" width="1080" height="1920"></canvas>
+<script>
+const W=1080,H=1920,DUR=10;
+const c=document.getElementById('c'),ctx=c.getContext('2d');
+const LW=216,LH=384; // low-res swirl
+const lo=document.createElement('canvas');lo.width=LW;lo.height=LH;
+const lctx=lo.getContext('2d');const img=lctx.createImageData(LW,LH);
+const logo=new Image();logo.src='logo.png';
+// --- 3D value/gradient-ish noise
+const P=new Uint8Array(512);{let s=7;const p=[...Array(256).keys()];for(let i=255;i>0;i--){s=(s*16807)%2147483647;const j=s%(i+1);[p[i],p[j]]=[p[j],p[i]];}for(let i=0;i<512;i++)P[i]=p[i&255];}
+const fade=t=>t*t*t*(t*(t*6-15)+10),lerp=(a,b,t)=>a+(b-a)*t;
+function grad(h,x,y,z){h&=15;const u=h<8?x:y,v=h<4?y:(h===12||h===14?x:z);return((h&1)?-u:u)+((h&2)?-v:v);}
+function noise(x,y,z){const X=Math.floor(x)&255,Y=Math.floor(y)&255,Z=Math.floor(z)&255;x-=Math.floor(x);y-=Math.floor(y);z-=Math.floor(z);
+const u=fade(x),v=fade(y),w=fade(z);const A=P[X]+Y,AA=P[A]+Z,AB=P[A+1]+Z,B=P[X+1]+Y,BA=P[B]+Z,BB=P[B+1]+Z;
+return lerp(lerp(lerp(grad(P[AA],x,y,z),grad(P[BA],x-1,y,z),u),lerp(grad(P[AB],x,y-1,z),grad(P[BB],x-1,y-1,z),u),v),
+lerp(lerp(grad(P[AA+1],x,y,z-1),grad(P[BA+1],x-1,y,z-1),u),lerp(grad(P[AB+1],x,y-1,z-1),grad(P[BB+1],x-1,y-1,z-1),u),v),w);}
+const ease=t=>t<0?0:t>1?1:t*t*(3-2*t);
+const easeOut=t=>1-Math.pow(1-Math.min(1,Math.max(0,t)),3);
+const seg=(t,a,b)=>Math.min(1,Math.max(0,(t-a)/(b-a)));
+const mix=(a,b,t)=>a+(b-a)*t;
+// colour ramp: black -> maroon -> ember orange -> gold ; green rim on brightest ridges
+function ramp(v,g){v=Math.min(1,Math.max(0,v));
+ let r,gr,b;
+ if(v<.35){const k=v/.35;r=mix(10,110,k);gr=mix(4,30,k);b=mix(8,30,k);}
+ else if(v<.7){const k=(v-.35)/.35;r=mix(110,235,k);gr=mix(30,110,k);b=mix(30,40,k);}
+ else{const k=(v-.7)/.3;r=mix(235,255,k);gr=mix(110,215,k);b=mix(40,150,k);}
+ // greenish halo on mid-high filaments
+ const gk=g;r=mix(r,r*.45,gk);gr=mix(gr,gr+70,gk);b=mix(b,b*.7+10,gk);
+ return [r,gr,b];}
+function swirl(t){
+ const d=img.data;
+ const zoom=mix(1.0,1.9,ease(t/4.6)); // push in
+ const spin=t*0.55;
+ for(let j=0;j<LH;j++)for(let i=0;i<LW;i++){
+  let x=(i/LW-.5)*2, y=((j/LH-.5)*2)*(LH/LW);
+  const r0=Math.hypot(x,y);
+  x/=zoom;y/=zoom;
+  const r=Math.hypot(x,y),a=Math.atan2(y,x)+spin/(0.35+r*1.3);
+  const sx=Math.cos(a)*r,sy=Math.sin(a)*r;
+  // domain warp
+  const wx=noise(sx*2.2+3.1,sy*2.2,t*.25),wy=noise(sx*2.2,sy*2.2+9.7,t*.25);
+  const nx=sx*3.4+wx*.9,ny=sy*3.4+wy*.9;
+  let n=noise(nx,ny,t*.35)+.5*noise(nx*2.1,ny*2.1,t*.5+4)+.25*noise(nx*4.3,ny*4.3,t*.7+8);
+  n/=1.75;
+  const ridge=Math.pow(1-Math.abs(n*1.6),5);          // thin bright filaments
+  const body=.5+.5*noise(sx*1.3,sy*1.3,t*.2+20);      // soft glow body
+  const core=Math.exp(-r0*r0*2.2);                     // warm centre light
+  let v=ridge*.85+body*.28*(.3+core*1.2)+core*.35;
+  v*=1.0-Math.pow(r0*.62,2.2);                         // vignette
+  const g=.45*Math.min(1,Math.max(0,(ridge-.55)*2.2))*Math.min(1,Math.max(0,(r0-.35)*1.8));
+  const col=ramp(v*1.15,g);
+  const k=(j*LW+i)*4;d[k]=col[0];d[k+1]=col[1];d[k+2]=col[2];d[k+3]=255;
+ }
+ lctx.putImageData(img,0,0);
+}
+function grain(alpha){ // cheap film grain via tiny noise canvas
+ if(!grain.c){grain.c=document.createElement('canvas');grain.c.width=grain.c.height=180;}
+ const g=grain.c.getContext('2d'),id=g.createImageData(180,180);
+ const s=grain.seed=(grain.seed||1)+1;
+ for(let i=0;i<id.data.length;i+=4){const v=((Math.sin(i*12.9898+s*78.233)*43758.5453)%1+1)%1*255;id.data[i]=id.data[i+1]=id.data[i+2]=v;id.data[i+3]=255;}
+ g.putImageData(id,0,0);ctx.save();ctx.globalAlpha=alpha;ctx.globalCompositeOperation='overlay';
+ ctx.imageSmoothingEnabled=false;ctx.drawImage(grain.c,0,0,W,H);ctx.restore();
+}
+const CREAM='#eee5d6',BROWN='#684a2d';
+const LX=54,LY=100,LWd=483,LHt=269; // logo crop inside logo.png
+function drawLogo(t){
+ const p=easeOut(seg(t,5.0,7.2));
+ if(p<=0)return;
+ const w=860,h=w*LHt/LWd,x=(W-w)/2,y=H/2-h/2-30;
+ ctx.save();
+ ctx.globalAlpha=Math.min(1,p*1.6);
+ ctx.filter=`blur(${(1-p)*14}px)`;
+ const s=mix(1.06,1,p);ctx.translate(W/2,y+h/2);ctx.scale(s,s);ctx.translate(-W/2,-(y+h/2));
+ // reveal upward with soft mask
+ const rv=seg(t,5.0,7.0);
+ ctx.beginPath();ctx.rect(0,y-40+(1-easeOut(rv))*(h+80),W,h+80);ctx.clip();
+ ctx.drawImage(logo,LX,LY,LWd,LHt,x,y,w,h);
+ ctx.restore();
+}
+function render(t){
+ t=Math.max(0,Math.min(DUR,t));
+ // BACKGROUND swirl
+ swirl(t);
+ ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
+ ctx.filter='blur(1.2px)';ctx.drawImage(lo,0,0,W,H);ctx.filter='none';
+ // intro fade from black
+ const fin=1-seg(t,0,.9);if(fin>0){ctx.fillStyle=`rgba(0,0,0,${fin})`;ctx.fillRect(0,0,W,H);}
+ // light bloom + cream reveal (expanding soft-edged circle from the swirl core)
+ const b=ease(seg(t,3.0,5.4));
+ if(b>0){
+  const R=b*1750, cx=W/2, cy=H/2;
+  // white-hot flash ring
+  const fl=Math.sin(Math.PI*seg(t,3.0,5.6));
+  const gr=ctx.createRadialGradient(cx,cy,Math.max(0,R-260),cx,cy,R+40);
+  gr.addColorStop(0,CREAM);gr.addColorStop(.72,CREAM);
+  gr.addColorStop(.9,'rgba(255,214,150,.85)');gr.addColorStop(1,'rgba(255,190,110,0)');
+  ctx.fillStyle=gr;ctx.beginPath();ctx.arc(cx,cy,R+40,0,7);ctx.fill();
+  ctx.fillStyle=`rgba(255,200,130,${fl*.25})`;ctx.fillRect(0,0,W,H);
+ }
+ // faint warm edge glow that stays on cream (memory of the swirl)
+ const post=seg(t,5.2,6.6);
+ if(post>0){const eg=ctx.createRadialGradient(W/2,H/2,H*.28,W/2,H/2,H*.72);
+  eg.addColorStop(0,'rgba(200,140,90,0)');eg.addColorStop(1,`rgba(170,110,70,${.22*post})`);
+  ctx.fillStyle=eg;ctx.fillRect(0,0,W,H);}
+ drawLogo(t);
+ // thin line + small caption draws in
+ const l=easeOut(seg(t,7.2,8.6));
+ if(l>0){ctx.save();ctx.strokeStyle=BROWN;ctx.globalAlpha=.55;ctx.lineWidth=2;
+  const y=H/2+250,half=110*l;ctx.beginPath();ctx.moveTo(W/2-half,y);ctx.lineTo(W/2+half,y);ctx.stroke();
+  ctx.restore();}
+ // outro: gentle fade of everything to cream at the very end is avoided; hold
+ grain(.09);
+}
+window.renderFrame=render;window.ready=new Promise(r=>logo.onload=r);
+if(!location.search.includes('static')){let t0;logo.onload=()=>{const loop=n=>{t0=t0??n;render(((n-t0)/1000)%DUR);requestAnimationFrame(loop);};requestAnimationFrame(loop);};}
+</script></body></html>
